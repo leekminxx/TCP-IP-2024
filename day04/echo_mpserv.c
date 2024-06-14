@@ -8,12 +8,7 @@ accept 함수를 호출한 이후에 fork 함수를 호출하고 있음
 
 accept 함수호출을 통해서 만들어진 소켓의 파일 디스크립터가 자식프로세스 에게 복사 되어 
 서버는 자신이 소유하고 있는 파일 디스크립터를 소멸시켜야 함
-
-
 */
-
-
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

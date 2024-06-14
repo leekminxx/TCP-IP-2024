@@ -5,10 +5,7 @@
 시그널 SIGCHLD에 대한 시그널 핸들러의 등록과정
 시그널 SIGHLD 의 발생을 대기하기 위해서 부모 프로세스를 5초간 5회 멈춰놓았음
 시그널이 발생하면 부모 프로세스는 깨어나기 때문에 실제 멈춰있는 시간은 25초가 되지 않음
-
-
 */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>

@@ -736,3 +736,229 @@ TCP/IP-2024
             ...
         ```
 
+## Day06
+<details>
+<summary>내용</summary>
+- 멀티프로세스 : fork()
+- 멀티플렉싱 : select()
+- 멀티스레드
+
+- select 기반의 IO 멀티플렉싱이 느린 이유
+    - select 함수 호출 후, 모든 파일 디스크립터를 대상으로 하는 반복문
+    - select 함수 호출할 때마다 관찰대상에 대한 정보를 매번 운영체제에게 전달
+
+- select() 는 파일 디스크립터, 정확히 말하면 소켓의 변화를 관찰하는 함수
+- 소켓은 OS에 의해 관리되므로 select()는 절대적으로 운영체제에 의해 기능의 완성되는 함수!
+
+- epoll : select() 단점 극복!
+    - 상태 변화의 확인을 위한 전체 파일 디스크립터 대상으로 하는 반복문 필요X
+    - select 함수에 대응하는 epoll_wait 함수 호출 시, 관찰 대상의 정보를 매번 전달할 필요X
+    1. epoll_create : epoll 파일 디스크립터 저장소 생성
+    2. epoll_ctl : 저장소에 파일 디스크립터 등록 및 삭제
+    3. epoll_wait : select 함수와 마찬가지로 파일 디스크립터의 변화를 대기
+
+    - select 방식 - 관찰대상인 파일 디스크립터의 저장을 위해 fd_set형 변수 선언
+    - epoll 방식 - 관찰대상인 파일 디스크립터의 저장을 운영체제가 담당, 저장소의 생성을 OS에게 요청할 때 epoll_create 사용
+
+    - 리눅스 커널 버전 (epoll 적용을 위해서는 2.5.44 이상)
+        ```shell
+        > uname -r
+        > cat /proc/sys/kernel/osrelease
+        ```
+    
+    - epoll_create() 호출 시 생성되는 파일 디스크립터의 저장소는 *epoll 인스턴스*
+        ```c
+        int epoll_create(int size);
+            // 성공 시 epoll 파일 디스크립터, 실패 시 -1 반환
+            // 반환되는 파일 디스크립터는 epoll 인스턴스 구분 목적으로 사용됨
+            // 소멸 시에는 다른 파일 디스크립터들과 마찬가지로 close 함수 호출을 통한 종료의 과정 거쳐야함
+            // size : epoll 인스턴스의 크기 정보(그냥 epoll 인스턴스의 크기를 결정하는 데 있어 참고용)
+        ```
+
+    - epoll_ctl() : epoll 인스턴스 생성 후 epoll 인스턴스(파일 디스크립터 저장소)에 관찰대상이 되는 파일 디스크립터 등록 시 사용
+        ```c
+        int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event);
+            // 성공 시 0, 실패 시 -1 반환
+            // epfd : 관찰대상을 등록할 epoll 인스턴스의 파일 디스크립터
+            // op : 관찰대상의 추가, 삭제, 변경여부 지정
+            // fd : 등록할 관찰 대상의 파일 디스크립터
+            // event : 관찰대상의 관찰 이벤트 유형
+            //       : 구조체 epoll_event의 포인터 => 이벤트가 발생한 파일 디스크립터를 묶는 용도, 이벤트 유형 등록 용도
+
+        // 구조체 epoll_event 기반으로 상태변화가 발생(이벤트 발생)한 파일 디스크립터가 별도로 묶인다!
+        struct epoll_event
+        {
+            __uint32_t events;
+            epoll_data_t data;
+        }
+
+        typedef union epoll_data
+        {
+            void *ptr;
+            int fd;
+            __uint32_t u32;
+            __uint64_t u64;
+        } epoll_data_t;
+        ```
+        
+        - epoll_ctl(A, EPOLL_CTL_ADD, B, C); - epoll 인스턴스 A에 파일 디스크립터 B를 등록하되, C를 통해 전달된 이벤트의 관찰을 목적으로 등록을 
+        - epoll_ctl(A, EPOLL_CTL_DEL, B, NULL); - epoll 인스턴스 A에서 파일 디스크립터 B 삭제(삭제할 땐 관찰유형 불필요하니까 NULL 전달)
+
+        - 구조체 epoll_event
+            - 이벤트가 발생한 파일 디스크립터를 묶는 용도로 사용!
+            - 파일 디스크립터를 epoll 인스턴스에 등록할 때, 이벤트의 유형을 등록하는 용도로도 사용
+
+            ```c
+            struct epoll_event event;
+            ...
+            // epoll 인스턴스인 epfd에 sockfd를 등록하되, 수신할 데이터가 존재하는 상황에서 이벤트가 발생하도록 등록!
+            event.events = EPOLLIN;     // 수신된 데이터가 존재하는 상황(이벤트) 발생 시
+            event.data.fd = sockkd;
+            epoll_ctl(epfd, EPOLL_CTL_ADD, sockfd, &event);
+            ```
+
+    - epoll_wait() : select 함수와 마찬가지로 파일 디스크립터의 변화를 대기
+        ```c
+        int epoll_wait(int epfd, struct epoll_event *events, int maxevents, int timeout);
+            // 성공 시 이벤트가 발생한 파일 디스크립터의 수, 실패 시 -1 반환
+            // epfd : 이벤트 발생의 관찰영역인 epoll 인스턴스의 파일 디스크립터
+            // events : 이벤트가 발생한 파일 디스크립터가 채워질 버퍼의 주소 값
+            //         => 동적으로 할당 후 인자로 전달!
+            // maxevents : 두 번째 인자로 전달된 주소 값의 버퍼에 등록 가능한 최대 이벤트 수
+            // timeout : 1/1000초 단위의 대기시간, -1 전달 시 이벤트가 발생할 때까지 무한대기
+        ```
+
+- 레벨 트리거(Level Trigger)
+    - 입력버퍼에 데이터가 남아있는 동안 계속해서 이벤트 발생
+
+- 엣지 트리거(Edge Trigger)
+    - 입력버퍼로 데이터가 수신된 상황에서 딱! 한번만 이벤트 등록 -> 입력 관련 이벤트 발생 시 입력버퍼에 저장된 데이터 전부를 읽어들여야 함!
+    - 데이터의 수신과 데이터가 처리되는 시점 분리 가능!
+        - 입력버퍼에 데이터가 수신된 상황(이벤트가 등록된 상황)임에도 불구하고,
+        - 이를 읽어들이고 처리하는 시점을 서버가 결정할 수 있도록 하는 것은 서버 구현에 엄청난 유연성을 제공함
+
+- 엣지 트리거 기반 서버 구현 시
+    1. 변수 errno를 이용한 오류 원인 확인
+        - 변수 접근 위해 <errno.h> 포함
+        - **read 함수**는 입력 버퍼가 비어 더 이상 읽어들일 데이터가 없을 때 **-1 리턴**, 이 때 errno에 상수 **EAGAIN** 저장
+    2. Non-blocking IO 를 위한 소켓 특성 변경
+        - 엣지 트리거 방식에서 blocking 방식으로 read&write 함수 호출 시 서버를 오랜 시간 멈추는 상황이 발생할 수 있기 때문에 
+        - Non-blocking 소켓을 기반으로 read&write 함수를 호출해야 함
+        ```c
+        int fcntl(int fildes, int cmd, ...);
+            // 성공 시 매개변수 cmd에 따른 값, 실패 시 -1 리턴
+            // fildes : 특성 변경의 대상이 되는 파일의 파일 디스크립터 전달
+            // cmd : 함수호출의 목적에 해당하는 정보 전달
+        ```
+        - 두 번째 인자로 F_GETFL 전달하면 첫 번째 인자로 전달된 파일 디스크립터에 설정되어 있는 특성정보 int형으로 얻을 수 있음
+        - 파일(소켓) Non-blocking 모드로 변경하기
+            ```c
+            int flag = fcntl(fd, F_GETFL, 0);
+            fcntl(fd, F_SETFL, flag|O_NONBLOCK);
+            ``` 
+
+- 쓰레드
+    - 하나의 프로세스 안에 여러 개의 쓰레드 생성
+    - 멀티 프로세스의 단점(컨텍스트 스위칭 등)을 최소화하기 위해 설계된 경량화된 프로세스
+    - 프로세스 : 운영체제 관점에서 별도의 실행흐름을 구성하는 단위
+    - 쓰레드 : 프로세스 관점에서 별도의 실행흐름을 구성하는 단위
+ 
+ - 쓰레드 vs 프로세스
+    - 프로세스의 메모리 구조
+        1. 데이터 영역 : 전역변수 할당
+        2. 힙 영역 : malloc 함수 등에 의한 동적 할당
+        3. 스택 영역 : 함수의 실행에 사용
+    - 쓰레드는 스택 영역만 분리시키고 데이터 영역과 힙 영역을 공유하도록 설계
+    - 프로세스 : 하나의 OS 안에서 둘 이상의 실행흐름을 형성하기 위한 도구
+    - 쓰레드 : 프로세스 내에서 생성 및 실행되는 구조
+    
+    - pthread_create 함수
+        - 쓰레드는 별도의 실행흐름을 가짐!
+        - 따라서 쓰레드만의 main 함수를 별도로 정의해야 함!!
+        - 이 함수를 시작으로 별도의 실행흐름을 형성해 줄 것을 OS에게 요청해야 하는데, 이를 목적으로 해당 함수를 호출
+        ```c
+        int pthread_create(pthread_t *restrict thread, const pthread_attr_t *restrict attr, void*(*start_routine)(void*), void *restrict arg)
+            // 성공 시 0, 실패 시 0 이외의 값 반환
+            // thread : 생성할 쓰레드의 ID 저장을 위한 변수의 주소 값 전달
+            // 참고로 쓰레드는 프로세스와 마찬가지로 쓰레드의 구분을 위한 ID 부여됨!
+            // attr : 쓰레드에 부여할 특성 정보의 전달을 위한 매개변수, NULL 전달 시 기본적인 특성의 쓰레드 생성됨
+            // start_routine : 쓰레드의 main 함수 역할을 하는, 별도 실행흐름의 시작이 되는 함수의 주소값(함수 포인터) 전달
+            // arg : 세 번째 인자를 통해 등록된 함수가 호출될 때 전달할 인자의 정보를 담고있는 변수의 주소 값 전달
+        ```
+
+    - pthread_join 함수
+        - 첫 번째 인자로 전달되는 ID의 쓰레드가 종료될 때까지 이 함수를 호출한 프로세스(혹은 쓰레드)를 대기상태에 둠
+        - 쓰레드의 main 함수가 반환하는 값 얻을 수 있음
+        ```c
+        int pthread_join(pthread_t thread, void **status);
+            // 성공 시 0, 실패 시 0 이외의 값 밙환
+            // thread : 이 매개변수에 전달되는 ID의 쓰레드가 종료될 때까지 함수는 반환하지 않음
+            // status : 쓰레드의 main 함수가 반환하는 값이 저장될 포인터 변수의 주소 값 전달
+        ```
+
+- 임계영역(Critical Section) 
+    - 함수 내에 둘 이상의 쓰레드가 동시에 실행하면 문제를 일으키는 하나 이상의 문장으로 묶여있는 코드 블록
+
+- 워커(Worker) 쓰레드 모델 - 둘 이상의 쓰레드를 생성, 각 쓰레드는 일꾼(Worker)의 형태
+
+- 동기화(Synchronization)
+    - 한 쓰레드가 전역변수에 접근하여 연산을 완료할 때까지, 다른 쓰레드가 해당 전역변수에 접근하지 못하도록 막는 것
+    1. 동일한 메모리 영역으로의 동시 접근이 발생하는 상황
+    2. 동일한 메모리 영역에 접근하는 쓰레드의 실행순서를 지정해야 하는 상황
+
+    - Mutex(Mutual Exclusion) : 쓰레드의 동시 접근을 허용하지 않음
+        - 임계영역(화장실)에 들어갈 때 문을 잠그고, 임계영역에서 나갈 때 문을 여는 자물쇠 시스템 
+        ```c
+        // 뮤텍스라는 자물쇠 시스템 생성 및 소멸
+        int pthread_mutex_init(pthread_mutex_t *mutex, const pthread_mutexattr_t *attr);
+        int pthread_mutex_destroy(pthread_mutex_t *mutex);
+
+        // 임계영역에 설치된 자물쇠 잠그고 풀 때
+        int pthread_mutex_lock(pthread_mutex_t *mutex);
+        // 임계영역의 시작
+        // ...
+        // 임계영역의 끝
+        int pthread_mutex_unlock(pthread_mutex_t *mutex);
+        ```
+        - Dead-lock(데드락)
+            - 임계영역을 빠져나가려는 쓰레드가 pthread_mutex_unlock() 를 호출하지 않아 
+            - pthread_mutex_lock 함수가 블로킹 상태에서 빠져나가지 못하는 상황
+
+    - Semaphore : 뮤텍스와 유사, 0과 1만을 사용하는 바이너리 세마포어를 대상으로 *쓰레드의 실행순서 컨트롤* 중심의 동기화
+        ```c
+        // sem : 세마포어의 참조 값 저장하고 있는 변수의 주소 값 전달
+        int sem_init(sem_t *sem, int pshared, int value);   // 세마포어 생성
+        int sem_destroy(sem_t *sem);                        // 세마포어 소멸
+        // sem_post에 전달되면 세마포어의 값은 하나 증가
+        // sem_wait에 전달되면 세마포어의 값은 하나 감소
+        int sem_post(sem_t *sem);
+        int sem_wait(sem_t *sem);
+
+        // 세마포어의 값은 0보다 작아질 수 없다!!!!!
+        // 현재 0인 상태에서 sem_wait 호출하면 호출한 쓰레드는 함수가 반환되지 않아 블로킹 상태 ㅠ
+        // 다른 쓰레드가 sem_post 호출하면 세마포어 값이 1이 되어 이 1을 0으로 감소시키면서 블로킹 상태 탈출!
+        // 이런 특징을 이용해서 임계영역 동기화 시킴! => 세마포어의 값이 0과 1 오가기 때문에 바이너리 세마포어라고 함
+        sem_wait(&sem);     // 세마포어 값을 0으로
+        // 임계영역의 시작
+        // ...
+        // 임계영역의 끝
+        sem_post(&sem);     // 세마포어 값을 1로
+        ```
+
+- 쓰레드의 소멸
+    1. pthread_join 함수 호출
+        - 쓰레드의 종료 대기 및 쓰레드의 소멸까지 유도
+        - 쓰레드가 종료될 때까지 블로킹 상태에 놓이는 문제점
+    2. pthread_detach 함수 호출
+        - 일반적으로 이 함수로 쓰레드의 소멸 유도
+        ```c
+        int pthread_detach(pthread_t thread);
+            // 성공 시 0, 실패 시 0 이외의 값 반환
+        ```
+        - 해당 함수 호출로 종료되지 않은 쓰레드가 종료되거나 블로킹 상태에 놓이지는 않음!
+        - 쓰레드에게 할당된 메모리의 소멸을 유도
+        - 해당 함수 호출 이후에는 해당 쓰레드를 대상으로 pthread_join 함수 호출 불가!
+        
+</details>
+
+## 
